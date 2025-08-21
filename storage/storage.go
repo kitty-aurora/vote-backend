@@ -3,97 +3,84 @@ package storage
 import (
 	"context"
 	"log"
-	"math/big"
+
 	"sync"
 
-	"vote-backend/vote" // abigen 生成的包
+	"vote-backend/voting"
 
 	"github.com/ethereum/go-ethereum/accounts/abi/bind"
-	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/ethclient"
 )
 
 var (
 	client          *ethclient.Client
-	contract        *vote.Voting
+	contract        *voting.Voting
 	auth            *bind.TransactOpts
 	initOnce        sync.Once
-	contractAddress = "0xYourContractAddressHere"
+	contractAddress = "0xYourContractAddressHere" // TODO: 部署后替换成真实合约地址
 )
 
-func initClient() {
+// 初始化合约连接
+func initContract() {
 	var err error
-	client, err = ethclient.Dial("https://goerli.infura.io/v3/YOUR_INFURA_KEY")
+	client, err = ethclient.Dial("https://sepolia.infura.io/v3/YOUR_INFURA_KEY") // TODO: 换成自己的节点
+	if err != nil {
+		log.Fatalf("Failed to connect to Ethereum client: %v", err)
+	}
+
+	// 这里简化，假设你已经有一个 account 的 auth
+	// 实际上你需要用 keystore / private key 来构造 auth
+	// auth, err = bind.NewTransactorWithChainID(...)
+	// 省略，后续你可以补全
+	// contract, err = voting.NewVoting(common.HexToAddress(contractAddress), client)
+	if err != nil {
+		log.Fatalf("Failed to load contract: %v", err)
+	}
+}
+
+// 获取候选人
+func GetCandidates() []map[string]interface{} {
+	initOnce.Do(initContract)
+
+	var result []map[string]interface{}
+
+	// 调用 getAllCandidates
+	names, votes, err := contract.GetAllCandidates(&bind.CallOpts{Context: context.Background()})
 	if err != nil {
 		log.Fatal(err)
 	}
 
-	contract, err = vote.NewVoting(common.HexToAddress(contractAddress), client)
+	for i, name := range names {
+		result = append(result, map[string]interface{}{
+			"name":  name,
+			"votes": votes[i].Int64(),
+		})
+	}
+	return result
+}
+
+// 投票
+func Vote(name string) (map[string]interface{}, bool) {
+	initOnce.Do(initContract)
+
+	tx, err := contract.Vote(auth, name)
 	if err != nil {
-		log.Fatal(err)
+		log.Printf("Failed to vote: %v", err)
+		return nil, false
 	}
 
-	// auth 初始化：这里需要你导入钱包私钥
-	// auth, _ = bind.NewKeyedTransactorWithChainID(privateKey, chainID)
+	// 返回交易哈希
+	return map[string]interface{}{
+		"txHash": tx.Hash().Hex(),
+	}, true
 }
 
-func GetCandidates() []vote.Candidate {
-	initOnce.Do(initClient)
-
-	candidates := []vote.Candidate{}
-	for i := int64(1); i <= int64(getCandidateCount()); i++ {
-		c, err := contract.GetCandidate(nil, big.NewInt(i))
-		if err != nil {
-			log.Println(err)
-			continue
-		}
-		candidates = append(candidates, c)
-	}
-	return candidates
-}
-
-func Vote(name string) (vote.Candidate, bool) {
-	initOnce.Do(initClient)
-
-	// 查找候选人 ID
-	var candidateID *big.Int
-	for i := int64(1); i <= int64(getCandidateCount()); i++ {
-		c, err := contract.GetCandidate(nil, big.NewInt(i))
-		if err != nil {
-			continue
-		}
-		if c.Name == name {
-			candidateID = c.Id
-			break
-		}
-	}
-
-	if candidateID == nil {
-		return vote.Candidate{}, false
-	}
-
-	// 调用链上 vote 函数（需要 auth 发送交易）
-	tx, err := contract.Vote(auth, candidateID)
-	if err != nil {
-		log.Println(err)
-		return vote.Candidate{}, false
-	}
-	log.Println("tx hash:", tx.Hash().Hex())
-
-	// 返回最新数据
-	c, _ := contract.GetCandidate(nil, candidateID)
-	return c, true
-}
-
+// 重置投票
 func ResetVotes() {
-	// 链上通常不支持 reset，除非你设计了管理员函数
-	log.Println("ResetVotes not supported on blockchain")
-}
-
-func getCandidateCount() int64 {
-	count, err := contract.CandidateCount(nil)
-	if err != nil {
-		log.Fatal(err)
-	}
-	return count.Int64()
+	//initOnce.Do(initContract)
+	//
+	//_, err := contract.Reset(auth)
+	//if err != nil {
+	//	log.Printf("Failed to reset votes: %v", err)
+	//}
 }
